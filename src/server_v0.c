@@ -122,7 +122,30 @@ int main(void) {
             }
         }
 
-        //
+        // Then, check for activity on client sockets
+        // This loops handles all client communication: recieving data and broadcasting
+        for (i = 0; i < MAX_CLIENTS; i++) {
+            sd = client_sockets[i]; // get socket descriptor for this client
+
+            // check if this client socket is in the set of descriptors with activity
+            if (FD_ISSET(sd, &readfds)) {
+                // try to recieve data from client
+                if ((valread = recv(sd, buffer, BUFFER_SIZE, 0)) == 0) {
+                    getpeername(sd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
+                    printf("Host disconnected, IP: %s,  PORT: %d, Socket FD: %d\n", inet_ntoa(address.sin_addr), ntohs(address.sin_port), sd);
+                    close(sd);
+                    client_sockets[i] = 0;
+                } else {
+                    // recv() returned data, we recieved a message
+
+                    buffer[valread] = '\0';
+
+                    printf("Recieved from client (FD: %d): %s", sd, buffer);
+
+                    // TODO: add code to broadcat msg to all other clients.
+                }
+            }
+        }
     } // end while(1_
 
     close(server_fd);
