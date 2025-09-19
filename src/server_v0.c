@@ -14,6 +14,18 @@
 // global variables (for simplicity in this version)
 int client_sockets[MAX_CLIENTS] = {0}; // array to track connected clients socket
 
+// Function to broadcast a message to all connected clients except the sender
+void broadcast_message(int sender_socket, const char *message) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        int dest_socket = client_sockets[i];
+
+        // check if the socket is valid and it's not the sender
+        if (dest_socket > 0 && dest_socket != sender_socket) {
+            send(dest_socket, message, strlen(message), 0);
+        }
+    }
+}
+
 // Function to initialize the server socket
 int server_socket_setup()
 {
@@ -61,7 +73,7 @@ int server_socket_setup()
 
 int main(void) {
     int server_fd, new_socket, fdmax, activity, i, valread, sd;
-    struct sockaddr_in address;
+    struct sockaddr_in address; // client address
     int addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
 
@@ -138,15 +150,17 @@ int main(void) {
                 } else {
                     // recv() returned data, we recieved a message
 
-                    buffer[valread] = '\0';
+                    buffer[valread] = '\0'; // Null- terminate the string
+                    getpeername(sd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
 
-                    printf("Recieved from client (FD: %d): %s", sd, buffer);
+                    printf("Recieved from %s:%d (FD: %d): %s", inet_ntoa(address.sin_addr), ntohs(address.sin_port), sd, buffer);
 
-                    // TODO: add code to broadcat msg to all other clients.
+                    // Broadcast the recieved message to all other clients.
+                    broadcast_message(sd, buffer);
                 }
             }
         }
-    } // end while(1_
+    } // end while(1)
 
     close(server_fd);
     return 0;
