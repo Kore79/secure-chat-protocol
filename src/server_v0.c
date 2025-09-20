@@ -11,20 +11,48 @@
 #define MAX_CLIENTS 10
 #define BUFFER_SIZE 1024
 
-// global variables (for simplicity in this version)
-int client_sockets[MAX_CLIENTS] = {0}; // array to track connected clients socket
+typedef struct {
+    int socket_fd; // client's socket file descriptor
+    char name[32]; // username client has chosen
+} client_info_t;
+
+
+// global array to track connected clients
+client_info_t clients[MAX_CLIENTS] = {0}; // Initialize all to zero
+
 
 // Function to broadcast a message to all connected clients except the sender
-void broadcast_message(int sender_socket, const char *message) {
+void broadcast_message(int sender_socket, const char *username, const char *message) {
+    char formatted_message[BUFFER_SIZE];
+
+    // Format the message as "[username] message"
+    snprintf(formatted_message, BUFFER_SIZE, "[%s] %s", username, message);
+
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        int dest_socket = client_sockets[i];
+        int dest_socket = clients[i].socket_fd;
 
         // check if the socket is valid and it's not the sender
         if (dest_socket > 0 && dest_socket != sender_socket) {
-            send(dest_socket, message, strlen(message), 0);
+            send(dest_socket, formatted_message, strlen(formatted_message), 0);
         }
     }
+
+    // print message on the server console
+    printf("%s", formatted_message);
 }
+
+
+// Helper function to find a client's index in the array by their socket fd
+int find_client_index(int socket_fd) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].socket_fd == socket_fd) {
+            return i; // found client
+        }
+    }
+
+    return -1;
+}
+
 
 // Function to initialize the server socket
 int server_socket_setup()
@@ -93,10 +121,10 @@ int main(void) {
 
         // add all valid clients socket to the set
         for (i = 0; i < MAX_CLIENTS; i++) {
-            sd = client_sockets[i]; // get socket descriptor from array
+            sd = clients[i].socket_fd; // get socket descriptor from array
 
             // if socket is valid, add it to the set we want to monitor
-            if(sd > 0) {
+            if (sd > 0) {
                 FD_SET(sd, &readfds);
             }
 
@@ -126,9 +154,13 @@ int main(void) {
 
             // add new socket to our array of client sockets
             for (i = 0; i < MAX_CLIENTS; i++) {
-                if (client_sockets[i] == 0) { // find an empty slot
-                    client_sockets[i] = new_socket;
-                    printf("Adding to list of sockets as index %d\n", i);
+                if (clients[i].socket_fd == 0) { // find an empty slot
+                    clients[i].socket_fd = new_socket;
+                    clients[i].name[0] = '\0'; // initialize username to empty
+
+                    printf("Adding new client to slot %d, socket fd: %d\n", i, new_socket);
+                    // Send a welcome message prompting for a name
+                    send(new_socket, "Welcome! Please set your name with: NAME <yourname>\n", 52, 0);
                     break;
                 }
             }
@@ -137,7 +169,7 @@ int main(void) {
         // Then, check for activity on client sockets
         // This loops handles all client communication: recieving data and broadcasting
         for (i = 0; i < MAX_CLIENTS; i++) {
-            sd = client_sockets[i]; // get socket descriptor for this client
+            sd = clients[i].socket_fd; // get socket descriptor for this client
 
             // check if this client socket is in the set of descriptors with activity
             if (FD_ISSET(sd, &readfds)) {
@@ -146,22 +178,59 @@ int main(void) {
                     getpeername(sd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
                     printf("Host disconnected, IP: %s,  PORT: %d, Socket FD: %d\n", inet_ntoa(address.sin_addr), ntohs(address.sin_port), sd);
                     close(sd);
-                    client_sockets[i] = 0;
+                    printf("Cleared client from slot %d (Name: %s)\n", i, clients[i].name);
+                    clients[i].socket_fd = 0; // clear socket
+                    clients[i].name[0] = '\0'; // clear username
                 } else {
                     // recv() returned data, we recieved a message
 
                     buffer[valread] = '\0'; // Null- terminate the string
-                    getpeername(sd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
+                    int client_index = find_client_index(sd);
+                    if (client_index == -1) {
+                        printf("Error: Recieved data from an unknown socket %d\n", sd);
+                        close(sd);
+                        continue;
+                    }
 
-                    printf("Recieved from %s:%d (FD: %d): %s", inet_ntoa(address.sin_addr), ntohs(address.sin_port), sd, buffer);
+                    // parse the command (simplistic parsing by looking for a space or new line
+                    char *command = strtok(buffer, " \n"); // get the first word (NAME or SAY)
+                    char *argument = strtok(NULL, "\n"); // get the rest of the line
 
-                    // Broadcast the recieved message to all other clients.
-                    broadcast_message(sd, buffer);
+                    if (command == NULL) {
+                        // No command recieved, ignore
+                        continue;
+                    }
+
+                    if (strcmp(command, "NAME") == 0) {
+                        // NAME command: set the client's username
+                        if (argument == NULL) {
+                            send(sd, "ERROR: NAME requires a username\n", 32, 0);
+                        } else {
+                            strncpy(clients[client_index].name, argument, 31);
+                            clients[client_index].name[31] = '\0';
+                            printf("Client on socket %d is now known as: %s\n", sd, argument);
+                            send(sd, "OK\n", 3, 0);
+                        }
+                    } else if (strcmp(command, "SAY") == 0) {
+                        // SAY command: Broadcast the message to everyone else
+                        if (argument == NULL) {
+                            send(sd, "ERROR: SAY requires a message\n", 30, 0);
+                        } else {
+                            // check if client has set a name
+                            if (strlen(clients[client_index].name) == 0) {
+                                send(sd, "ERROR: Set your name with NAME <username> first\n", 48, 0);
+                            } else {
+                                broadcast_message(sd, clients[client_index].name, argument);
+                            }
+                        }
+                    } else {
+                        // unkown command
+                        send(sd, "ERROR: Unknown command. Use 'NAME <username>' or 'SAY <message>'\n", 64, 0);
+                    }
                 }
             }
         }
-    } // end while(1)
+    }
 
-    close(server_fd);
     return 0;
 }
